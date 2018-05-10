@@ -105,7 +105,7 @@ func Logc(lvl level, closure func() string) {
 }
 
 // IsLogging checks if provided level is logged
-func IsLogging(level log4go.Level) bool {
+func IsLogging(level Level) bool {
 	for _, filt := range Global {
 		if level >= filt.Level {
 			return true
