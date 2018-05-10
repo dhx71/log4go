@@ -104,6 +104,16 @@ func Logc(lvl level, closure func() string) {
 	Global.intLogc(lvl, closure)
 }
 
+// IsLogging checks if provided level is logged
+func IsLogging(level log4go.Level) bool {
+	for _, filt := range Global {
+		if level >= filt.Level {
+			return true
+		}
+	}
+	return false
+}
+
 // Utility for finest log messages (see Debug() for parameter explanation)
 // Wrapper for (*Logger).Finest
 func Finest(arg0 interface{}, args ...interface{}) {
