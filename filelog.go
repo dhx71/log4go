@@ -3,8 +3,12 @@
 package log4go
 
 import (
-	"os"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -30,6 +34,8 @@ type FileLogWriter struct {
 	// Rotate at size
 	maxsize         int
 	maxsize_cursize int
+
+	maxtotalsize int64
 
 	// Rotate daily
 	daily          bool
@@ -78,6 +84,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
 				w.file.Close()
 			}
+			w.Close()
 		}()
 
 		for {
@@ -130,30 +137,28 @@ func (w *FileLogWriter) intRotate() error {
 		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
 		w.file.Close()
 	}
-
-	// If we are keeping log files, move it to the next available number
+	canReset := true
+	// If we are keeping log files, rename it
 	if w.rotate {
-		_, err := os.Lstat(w.filename)
+		info, err := os.Lstat(w.filename)
 		if err == nil { // file exists
-			// Find the next available number
-			num := 1
-			fname := ""
-			for ; err == nil && num <= 999; num++ {
-				fname = w.filename + fmt.Sprintf(".%03d", num)
-				_, err = os.Lstat(fname)
-			}
-			// return error if the last file checked still existed
-			if err == nil {
-				return fmt.Errorf("Rotate: Cannot find free log number to rename %s\n", w.filename)
-			}
-
+			// new name
+			ext := filepath.Ext(w.filename)
+			fname := w.filename + fmt.Sprintf(".%04d%02d%02d.%02d%02d%02d.%03d%s",
+				info.ModTime().Year(), info.ModTime().Month(), info.ModTime().Day(),
+				info.ModTime().Hour(), info.ModTime().Minute(), info.ModTime().Second(),
+				info.ModTime().Nanosecond()/1000000,
+				ext)
 			// Rename the file to its newfound home
 			err = os.Rename(w.filename, fname)
 			if err != nil {
-				return fmt.Errorf("Rotate: %s\n", err)
+				fmt.Printf("Rotation failed: %s\n", err)
+				canReset = false // will retry again next time...
 			}
 		}
 	}
+
+	w.checkTotalSize()
 
 	// Open the log file
 	fd, err := os.OpenFile(w.filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0660)
@@ -165,14 +170,55 @@ func (w *FileLogWriter) intRotate() error {
 	now := time.Now()
 	fmt.Fprint(w.file, FormatLogRecord(w.header, &LogRecord{Created: now}))
 
-	// Set the daily open date to the current date
-	w.daily_opendate = now.Day()
+	if canReset {
+		// Set the daily open date to the current date
+		w.daily_opendate = now.Day()
 
-	// initialize rotation values
-	w.maxlines_curlines = 0
-	w.maxsize_cursize = 0
+		// initialize rotation values
+		w.maxlines_curlines = 0
+		w.maxsize_cursize = 0
+	}
 
 	return nil
+}
+
+type ByDateASC []os.FileInfo
+
+func (a ByDateASC) Len() int           { return len(a) }
+func (a ByDateASC) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByDateASC) Less(i, j int) bool { return a[i].ModTime().Before(a[j].ModTime()) }
+
+func (w *FileLogWriter) checkTotalSize() {
+	if w.maxtotalsize == 0 {
+		// no file cleanup
+		return
+	}
+
+	dir := filepath.Dir(w.filename)
+	base := filepath.Base(w.filename)
+
+	infos, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var totalsize int64
+	matchedFiles := make([]os.FileInfo, 0)
+	for _, info := range infos {
+		if !info.IsDir() && strings.HasPrefix(info.Name(), base) {
+			// one of our file
+			matchedFiles = append(matchedFiles, info)
+			totalsize += info.Size()
+		}
+	}
+	sort.Sort(ByDateASC(matchedFiles))
+
+	for _, info := range matchedFiles {
+		if w.maxtotalsize > totalsize {
+			break
+		}
+		totalsize -= info.Size()
+		os.Remove(filepath.Join(dir, info.Name()))
+	}
 }
 
 // Set the logging format (chainable).  Must be called before the first log
@@ -206,6 +252,11 @@ func (w *FileLogWriter) SetRotateLines(maxlines int) *FileLogWriter {
 func (w *FileLogWriter) SetRotateSize(maxsize int) *FileLogWriter {
 	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotateSize: %v\n", maxsize)
 	w.maxsize = maxsize
+	return w
+}
+
+func (w *FileLogWriter) SetMaxTotalSize(max int64) *FileLogWriter {
+	w.maxtotalsize = max
 	return w
 }
 
