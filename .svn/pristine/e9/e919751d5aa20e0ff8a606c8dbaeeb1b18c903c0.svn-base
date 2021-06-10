@@ -137,11 +137,25 @@ func (w *FileLogWriter) intRotate() error {
 		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
 		w.file.Close()
 	}
-	canReset := true
-	// If we are keeping log files, rename it
+
+	// If we are keeping log files, move it to the next available number
 	if w.rotate {
 		info, err := os.Lstat(w.filename)
 		if err == nil { // file exists
+			/*
+							// Find the next available number
+				num := 1
+				fname := ""
+				ext := filepath.Ext(w.filename)
+				for ; err == nil && num <= 999; num++ {
+					fname = w.filename + fmt.Sprintf(".%03d%s", num, ext)
+					_, err = os.Lstat(fname)
+				}
+				// return error if the last file checked still existed
+				if err == nil {
+					return fmt.Errorf("Rotate: Cannot find free log number to rename %s\n", w.filename)
+				}
+			*/
 			// new name
 			ext := filepath.Ext(w.filename)
 			fname := w.filename + fmt.Sprintf(".%04d%02d%02d.%02d%02d%02d.%03d%s",
@@ -152,8 +166,7 @@ func (w *FileLogWriter) intRotate() error {
 			// Rename the file to its newfound home
 			err = os.Rename(w.filename, fname)
 			if err != nil {
-				fmt.Printf("Rotation failed: %s\n", err)
-				canReset = false // will retry again next time...
+				fmt.Printf("Rotate: %s\n", err)
 			}
 		}
 	}
@@ -170,14 +183,12 @@ func (w *FileLogWriter) intRotate() error {
 	now := time.Now()
 	fmt.Fprint(w.file, FormatLogRecord(w.header, &LogRecord{Created: now}))
 
-	if canReset {
-		// Set the daily open date to the current date
-		w.daily_opendate = now.Day()
+	// Set the daily open date to the current date
+	w.daily_opendate = now.Day()
 
-		// initialize rotation values
-		w.maxlines_curlines = 0
-		w.maxsize_cursize = 0
-	}
+	// initialize rotation values
+	w.maxlines_curlines = 0
+	w.maxsize_cursize = 0
 
 	return nil
 }
